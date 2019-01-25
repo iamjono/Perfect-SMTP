@@ -38,7 +38,7 @@ public enum SMTPError:Error {
 	case INVALID_PROTOCOL
 	/// base64 failed
 	case INVALID_ENCRYPTION
-	
+
 	case general(Int, String)
 }
 
@@ -83,13 +83,13 @@ public struct Recipient {
 
 /// string extension for express conversion from recipient, etc.
 extension String {
-    func base64Encoded() -> String? {
-        if let data = self.data(using: .utf8) {
-            return data.base64EncodedString()
-        }
-        return nil
-    }
-    
+	func base64Encoded() -> String? {
+		if let data = self.data(using: .utf8) {
+			return data.base64EncodedString()
+		}
+		return nil
+	}
+
 	/// get RFC 5322-compliant date for email
 	static var rfc5322Date: String {
 		let dateFormatter = DateFormatter()
@@ -98,7 +98,7 @@ extension String {
 		let compliantDate = dateFormatter.string(from: Date())
 		return compliantDate
 	}
-	
+
 	/// convert a recipient to standard email format: "Full Name"<nickname@some.where>
 	/// - parameters:
 	///   - recipient: the email receiver name / address structure
@@ -107,21 +107,21 @@ extension String {
 		if recipient.name.isEmpty {
 			self = recipient.address
 		} else {
-            if let recipientNameB64 = recipient.name.base64Encoded() {
-                self = "=?utf-8?B?\(recipientNameB64)?= <\(recipient.address)>"
-            } else {
-                self = "\"\(recipient.name)\" <\(recipient.address)>"
-            }
+			if let recipientNameB64 = recipient.name.base64Encoded() {
+				self = "=?utf-8?B?\(recipientNameB64)?= <\(recipient.address)>"
+			} else {
+				self = "\"\(recipient.name)\" <\(recipient.address)>"
+			}
 		}
 	}
-	
+
 	/// convert a group of recipients into an address list, joined by comma
 	/// - parameters:
 	///   - recipients: array of recipient
 	init(recipients: [Recipient]) {
 		self = recipients.map{String(recipient: $0)}.joined(separator: ", ")
 	}
-	
+
 	/// MIME mail header: To/Cc/Bcc + recipients
 	/// - parameters:
 	///   - prefix: To / Cc or Bcc
@@ -130,7 +130,7 @@ extension String {
 		let r = String(recipients: recipients)
 		self = "\(prefix): \(r)\r\n"
 	}
-	
+
 	/// get the address info from a recipient, i.e, someone@somewhere -> @somewhere
 	var emailSuffix: String {
 		get {
@@ -138,13 +138,13 @@ extension String {
 				return self
 			}
 			#if swift(>=4.0)
-				return String(self[at..<endIndex])
+			return String(self[at..<endIndex])
 			#else
-				return self[at..<endIndex]
+			return self[at..<endIndex]
 			#endif
 		}
 	}
-	
+
 	/// extract file name from a full path
 	var fileNameWithoutPath: String {
 		get {
@@ -152,7 +152,7 @@ extension String {
 			return String(segments[segments.count - 1])
 		}
 	}
-	
+
 	/// extract file suffix from a file name
 	var suffix: String {
 		get {
@@ -166,11 +166,11 @@ private struct EmailBodyGen: CURLRequestBodyGenerator {
 	let bytes: [UInt8]
 	var offset = 0
 	var contentLength: Int? { return bytes.count }
-	
+
 	init(_ string: String) {
 		bytes = Array(string.utf8)
 	}
-	
+
 	mutating func next(byteCount: Int) -> [UInt8]? {
 		let count = bytes.count
 		let remaining = count - offset
@@ -210,20 +210,25 @@ public class EMail {
 		get { return content }
 		set { content = newValue }
 	}
-    public var reference : String = ""
+	/// raw email content body
+	/// used when a specifically crafted body content is required
+	/// such as special encryption formats
+	public var rawContent: String = ""
+
+	public var reference : String = ""
 	public var connectTimeoutSeconds: Int = 15
 	/// for debugging purposes
 	public var debug = false
-	
+
 	var progress = 0
-	
+
 	/// constructor
 	/// - parameters:
 	///   - client: SMTP client for login info
 	public init(client: SMTPClient) {
 		self.client = client
 	}
-	
+
 	/// transform an attachment into an MIME part
 	/// - parameters:
 	///   - path: local full path
@@ -253,7 +258,7 @@ public class EMail {
 			return ""
 		}
 	}
-	
+
 	/// encode a file by base64 method
 	/// - parameters:
 	///   - path: full path of the file to encode
@@ -287,7 +292,7 @@ public class EMail {
 		wraped.append(0)
 		return String(validatingUTF8: wraped)
 	}
-	
+
 	private func makeBody() throws -> (String, String) {
 		// !FIX! quoted printable?
 		var body = "Date: \(String.rfc5322Date)\r\n"
@@ -314,43 +319,47 @@ public class EMail {
 		// add the uuid of the email to avoid duplicated shipment
 		let uuid = UUID().uuidString
 		body += "Message-ID: <\(uuid).Perfect-SMTP\(from.address.emailSuffix)>\r\n"
-        if reference != "" {
-            body += "In-Reply-To: \(reference)\r\n"
-            body += "References: \(reference)\r\n"
-        }
-        
+		if reference != "" {
+			body += "In-Reply-To: \(reference)\r\n"
+			body += "References: \(reference)\r\n"
+		}
+
 		// add the email title
 		if subject.isEmpty {
 			throw SMTPError.INVALID_SUBJECT
 		} else {
 			body += "Subject: =?UTF-8?Q?\(subject)?=\r\n"
 		}
-		// mark the content type
-		body += "MIME-Version: 1.0\r\nContent-type: multipart/alternative; boundary=\"\(boundary)\"\r\n\r\n"
-		// add the html / plain text content body
-		if content.isEmpty && text.isEmpty {
-			throw SMTPError.INVALID_CONTENT
+		if rawContent.isEmpty {
+			// mark the content type
+			body += "MIME-Version: 1.0\r\nContent-type: multipart/alternative; boundary=\"\(boundary)\"\r\n\r\n"
+			// add the html / plain text content body
+			if content.isEmpty && text.isEmpty {
+				throw SMTPError.INVALID_CONTENT
+			} else {
+				if !text.isEmpty {
+					body += "--\(boundary)\r\nContent-Type: text/plain; charset=UTF-8; format=flowed\r\n\r\n\(text)\r\n\r\n"
+				}
+				if !content.isEmpty {
+					body += "--\(boundary)\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n\(content)\r\n\r\n"
+				}
+			}
+			// add the attachements
+			body += attachments.map { attach(path: $0, mimeType: MimeType.forExtension($0.suffix)) }.joined(separator: "\r\n")
+			// end of the attachements
+			body += "--\(boundary)--\r\n"
 		} else {
-			if !text.isEmpty {
-				body += "--\(boundary)\r\nContent-Type: text/plain; charset=UTF-8; format=flowed\r\n\r\n\(text)\r\n\r\n"
-			}
-			if !content.isEmpty {
-				body += "--\(boundary)\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n\(content)\r\n\r\n"
-			}
+			body += rawContent
 		}
-		// add the attachements
-		body += attachments.map { attach(path: $0, mimeType: MimeType.forExtension($0.suffix)) }.joined(separator: "\r\n")
-		// end of the attachements
-		body += "--\(boundary)--\r\n"
 		return (body, uuid)
 	}
-	
-    private func getResponse(_ body : String) throws -> CURLResponse {
+
+	private func getResponse(_ body : String) throws -> CURLResponse {
 		let recipients = to + cc + bcc
 		guard recipients.count > 0 else {
 			throw SMTPError.INVALID_RECIPIENT
 		}
-//        let (body, uuid) = try makeBody()
+		//        let (body, uuid) = try makeBody()
 		var options: [CURLRequest.Option] = (debug ? [.verbose] : []) + [
 			.mailFrom(from.address),
 			.userPwd("\(client.username):\(client.password)"),
@@ -361,16 +370,16 @@ public class EMail {
 			options.append(.useSSL)
 		}
 		let request = CURLRequest(client.url, options: options)
-        return try request.perform()
+		return try request.perform()
 	}
-	
+
 	/// send an email with the current settings
 	/// - parameters:
 	///   - completion: once sent, callback to the main thread with curl code, header & body string
 	/// - throws:
 	/// SMTPErrors
 	public func send(completion: ((Int, String, String) -> ())? = nil) throws {
-        let (body, uuid) = try makeBody()
+		let (body, uuid) = try makeBody()
 		let response = try getResponse(body)
 		let code = response.responseCode
 		if let c = completion {
