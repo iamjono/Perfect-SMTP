@@ -183,6 +183,13 @@ private struct EmailBodyGen: CURLRequestBodyGenerator {
 	}
 }
 
+/// EmailArttachment struct
+/// Allows direct injection of constructed attachments
+public struct EmailAttachment {
+	public var data = ""
+	public var mime = "text/plain"
+}
+
 /// SMTP mail composer
 public class EMail {
 	/// boundary for mark different part of the mail
@@ -201,6 +208,8 @@ public class EMail {
 	public var subject: String = ""
 	/// attachements of the mail - file name with full path
 	public var attachments:[String] = []
+	/// attachements of the mail - as data
+	public var attachmentData:[EmailAttachment] = [EmailAttachment]()
 	/// email content body
 	public var content: String = ""
 	// text version, to be added with a html version.
@@ -210,11 +219,27 @@ public class EMail {
 		get { return content }
 		set { content = newValue }
 	}
+	/// raw email content body
+	/// used when a specifically crafted body content is required
+	/// such as special encryption formats
+	public var rawContent: String = ""
+
     public var reference : String = ""
 	public var connectTimeoutSeconds: Int = 15
 	/// for debugging purposes
 	public var debug = false
-	
+
+	// === SMIME SETTINGS ===
+	// if true, this will trigger special encryption
+	// also requires certificates to be added, otherwise an error will be generated
+	public var sendSMIME = false
+	// private cert
+	public var privateCertificate: String = ""
+	// public cert
+	public var publicCertificate: Certificate = Certificate()
+
+	// === End Setup ===
+	 
 	var progress = 0
 	
 	/// constructor
@@ -270,6 +295,19 @@ public class EMail {
 		if self.debug {
 			print("encode \(fd.size) -> \(buffer.count)")
 		}
+		defer {
+			fd.close()
+		}
+		return encode(buffer: buffer)
+	}
+
+	/// encode a buffer / data
+	/// - parameters:
+	///   - buffer: data from the file or other input
+	/// - returns:
+	/// base64 encoded text
+	@discardableResult
+	private func encode(buffer: [UInt8]) -> String? {
 		var wraped = [UInt8]()
 		let szline = 78
 		var cursor = 0
@@ -283,11 +321,10 @@ public class EMail {
 			wraped.append(contentsOf: newline)
 			cursor += szline
 		}
-		fd.close()
 		wraped.append(0)
 		return String(validatingUTF8: wraped)
 	}
-	
+
 	private func makeBody() throws -> (String, String) {
 		// !FIX! quoted printable?
 		var body = "Date: \(String.rfc5322Date)\r\n"
@@ -325,23 +362,47 @@ public class EMail {
 		} else {
 			body += "Subject: =?UTF-8?Q?\(subject)?=\r\n"
 		}
-		// mark the content type
-		body += "MIME-Version: 1.0\r\nContent-type: multipart/alternative; boundary=\"\(boundary)\"\r\n\r\n"
-		// add the html / plain text content body
-		if content.isEmpty && text.isEmpty {
-			throw SMTPError.INVALID_CONTENT
+		if rawContent.isEmpty {
+
+			if content.isEmpty && text.isEmpty {
+				throw SMTPError.INVALID_CONTENT
+			}
+
+			if sendSMIME {
+				// set up to send from source private cert SMIME
+				let smime = SMIME(cert: privateCertificate)
+
+				// sign the message
+				var msg = ""
+				if !text.isEmpty { msg = text } else { msg = content }
+				let signedMsg = smime.sign(message: msg)
+//print(signedMsg)
+				// encrypt, and this is the public cert
+				let signedEncryptedMsg = smime.encrypt(message: signedMsg, using: publicCertificate.info?.certificate ?? "")
+				body += signedEncryptedMsg
+//print(signedEncryptedMsg)
+
+			} else {
+
+				// mark the content type
+				body += "MIME-Version: 1.0\r\nContent-type: multipart/alternative; boundary=\"\(boundary)\"\r\n\r\n"
+				// add the html / plain text content body
+
+				body += "--\(boundary)\r\n"
+				if !text.isEmpty {
+					body += "Content-Type: text/plain; charset=UTF-8; format=flowed\r\n\r\n\(text)\r\n\r\n"
+				}
+				if !content.isEmpty {
+					body += "Content-Type: text/html; charset=UTF-8\r\n\r\n\(content)\r\n\r\n"
+				}
+				// add the attachements
+				body += attachments.map { attach(path: $0, mimeType: MimeType.forExtension($0.suffix)) }.joined(separator: "\r\n")
+				// end of the attachements
+				body += "--\(boundary)--\r\n"
+			}
 		} else {
-			if !text.isEmpty {
-				body += "--\(boundary)\r\nContent-Type: text/plain; charset=UTF-8; format=flowed\r\n\r\n\(text)\r\n\r\n"
-			}
-			if !content.isEmpty {
-				body += "--\(boundary)\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n\(content)\r\n\r\n"
-			}
+			body += rawContent
 		}
-		// add the attachements
-		body += attachments.map { attach(path: $0, mimeType: MimeType.forExtension($0.suffix)) }.joined(separator: "\r\n")
-		// end of the attachements
-		body += "--\(boundary)--\r\n"
 		return (body, uuid)
 	}
 	
